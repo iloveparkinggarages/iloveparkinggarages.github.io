@@ -5,6 +5,7 @@ const {icon,hydrateIcons}=window.ParkingIcons;
 const {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR,apiConnected,requireAPI,connectParkingAPI,disconnectAPI}=window.ParkingCore;
 const $=selector=>document.querySelector(selector),all=selector=>[...document.querySelectorAll(selector)];
 let currentView='tickets',editingTickets=false;
+let apiConnection=null;
 let filter='all',tickets=[],vault=[],busy=false,activeTicket=null,scanStream=null,scanFrame=null,inactivity=null,toastTimer=null;
 const date=n=>new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(new Date(n));
 const statusLabel={ready:'Ready to pay',waiting:'Recheck needed',paid:'Paid & saved',saved:'Saved',error:'Needs attention',uncertain:'Verify payment'};
@@ -12,7 +13,7 @@ function toast(message){$('#toast').textContent=message;$('#toast').classList.ad
 function showError(error){const message=error.message||'Something went wrong. Please try again.';if($('#sheet').open){let box=$('#sheet-error');if(!box){box=document.createElement('div');box.id='sheet-error';box.className='notice red';box.setAttribute('role','alert');$('#sheet-body').prepend(box);}box.textContent=message;}else toast(message);}
 function stopScan(){cancelAnimationFrame(scanFrame);scanStream?.getTracks().forEach(track=>track.stop());scanStream=null;}
 function clearSensitive(){all('input[data-sensitive]').forEach(input=>{input.value='';});clearTimeout(inactivity);}
-function closeSheet(){if(busy){toast('Wait for this operation to finish.');return;}clearSensitive();stopScan();$('#sheet').close();activeTicket=null;}
+function closeSheet(){if(busy){toast('Wait for this operation to finish.');return;}apiConnection?.abort();apiConnection=null;clearSensitive();stopScan();$('#sheet').close();activeTicket=null;}
 function sheet(title,subtitle,html){closeTicketSwipes($('#ticket-list'));stopScan();clearSensitive();$('#sheet-title').innerHTML=`<h2>${esc(title)}</h2><small>${esc(subtitle)}</small>`;$('#sheet-body').innerHTML=html;hydrateIcons($('#sheet-body'));if(!$('#sheet').open)$('#sheet').showModal();}
 async function operation(fn){if(busy)return;$('#sheet-error')?.remove();busy=true;const buttons=all('#sheet button,#sheet input[type=submit]');buttons.forEach(x=>x.disabled=true);try{await fn();}catch(e){showError(e);}finally{busy=false;buttons.forEach(x=>x.disabled=false);}}
 function setView(view){closeTicketSwipes($('#ticket-list'));currentView=view;$('#toolbar-left').innerHTML=view==='tickets'?'Cards':icon('chevron-left')+'<span>Tickets</span>';$('#toolbar-add').hidden=view!=='vault';$('#add-ticket').hidden=view!=='tickets';for(const name of ['tickets','vault','settings'])$(`#${name}-view`).hidden=name!==view;all('.nav-item').forEach(button=>button.classList.toggle('active',button.dataset.view===view));if(view==='vault')renderVault();window.scrollTo({top:0,behavior:'smooth'});}
@@ -160,24 +161,46 @@ function saveVaultForm(){sheet('New payment method','Saved on this device',`<for
 function inspectVault(id){sheet('Unlock card','Enter the passcode for this card',`<form id="inspect-form"><label for="inspect-passcode">Passcode</label><input id="inspect-passcode" type="password" autocomplete="off" required data-sensitive><button class="button primary wide">Unlock</button></form><div id="inspect-result" role="status"></div>`);$('#inspect-form').onsubmit=event=>{event.preventDefault();operation(async()=>{const password=$('#inspect-passcode').value;$('#inspect-passcode').value='';$('#inspect-result').replaceChildren();const {card,label}=await unlockRecord(vault.find(item=>item.id===id),password);renderVault();$('#inspect-result').innerHTML=`<div class="notice"><strong>${esc(label)}</strong><br>${esc(card.brand)} · •••• ${esc(card.number.slice(-4))}<br>Expires ${card.month} / ${card.year}</div>`;});};}
 function privacy(){sheet('Privacy','Card storage and payments',`<div class="notice">AutoFill is the default. Saving a card in this app is optional.</div><h3>On this device</h3><p class="small-note">Tickets and encrypted vault records live in IndexedDB. The vault uses AES-256-GCM with a random salt and nonce, and a PBKDF2-SHA-256 key derived from your passcode (600,000 iterations). The key and passcode are not saved. A wrong passcode or modified record fails authentication before any card fields are filled.</p><h3>When you pay</h3><p class="small-note">Card details are sent directly to Authorize.net for tokenization. Your API Worker receives the ticket, payment token, amount, and masked card metadata. CVV is never saved by the app. No card data is put in cookies, URLs, app logs, or backups.</p><h3>What encryption cannot do</h3><p class="small-note">A short PIN can be guessed offline. Malicious JavaScript or a compromised device can read details while you enter or decrypt them. Browser storage may be cleared. This prototype has not undergone a payment security audit.</p>`);}
 function connectAPI(){
+ if(busy)return;
  sheet('Connect parking API','Enter the access key for your Worker',`
   <form id="api-connect-form" autocomplete="off">
    <label for="api-key">API access key</label>
    <input id="api-key" type="password" autocomplete="off" data-sensitive required>
-   <button class="button primary wide" type="submit">Connect</button>
+   <button id="api-submit" class="button primary wide" type="submit">Connect</button>
+   <button id="api-cancel" class="button secondary wide" type="button">Cancel</button>
+   <p id="api-status" class="small-note" role="status"></p>
   </form>
   <p class="small-note">Your browser remembers the key for this Worker on this device. Use Settings → Forget API key to remove it.</p>
  `);
- $('#api-connect-form').onsubmit=event=>{
+ $('#api-cancel').onclick=closeSheet;
+ $('#api-connect-form').onsubmit=async event=>{
   event.preventDefault();
-  operation(async()=>{
-   const key=$('#api-key').value.trim();
-   $('#api-key').value='';
-   const remembered=await connectParkingAPI(key);
-   busy=false;
+  if(apiConnection)return;
+  $('#sheet-error')?.remove();
+  const input=$('#api-key'),submit=$('#api-submit'),status=$('#api-status');
+  const key=input.value.trim();
+  input.value='';
+  submit.disabled=true;
+  status.textContent='Checking your API key…';
+  const attempt=new AbortController();
+  apiConnection=attempt;
+  const timeout=setTimeout(()=>attempt.abort(),10000);
+  try{
+   const remembered=await connectParkingAPI(key,attempt.signal);
+   if(apiConnection!==attempt)return;
+   apiConnection=null;
    closeSheet();
    toast(remembered?'Parking API connected. Key remembered on this device.':'Parking API connected for this tab. Browser storage is unavailable.');
-  });
+  }catch(error){
+   if(apiConnection===attempt)showError(attempt.signal.aborted?Error('The Worker took too long to respond. Try connecting again.'):error);
+  }finally{
+   clearTimeout(timeout);
+   if(apiConnection===attempt){
+    apiConnection=null;
+    submit.disabled=false;
+    status.textContent='';
+   }
+  }
  };
 }
 $('#edit-tickets').onclick=()=>{if(busy)return;editingTickets=!editingTickets;$('#ticket-list').dataset.editing=String(editingTickets);setTicketEditing($('#ticket-list'),editingTickets);$('#edit-tickets').textContent=editingTickets?'Done':'Edit';$('#edit-tickets').setAttribute('aria-pressed',String(editingTickets));};

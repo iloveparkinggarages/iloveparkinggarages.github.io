@@ -95,10 +95,11 @@ function disconnectAPI(){
  try{window.localStorage.removeItem(API_KEY_STORAGE);}
  catch{throw Error('Could not remove the saved key. Clear website data in your browser settings.');}
 }
-async function connectParkingAPI(key){
+async function connectParkingAPI(key,signal){
  if(typeof key!=='string'||!API_KEY_PATTERN.test(key))throw Error('Enter your 64-character API access key.');
  const credential={origin:workerOrigin(),key};
- const result=await requestAPI('health',undefined,credential);
+ const result=await requestAPI('health',undefined,credential,signal);
+ if(signal?.aborted)throw Error('API connection was canceled.');
  if(result.status!=='ready')throw Error('The parking API is unavailable.');
  try{
   window.localStorage.setItem(API_KEY_STORAGE,JSON.stringify(credential));
@@ -109,7 +110,7 @@ async function connectParkingAPI(key){
   return false;
  }
 }
-async function requestAPI(path,body,{origin,key}){
+async function requestAPI(path,body,{origin,key},signal){
  const url=origin+'/api/'+path;
  let response;
  try{
@@ -117,7 +118,7 @@ async function requestAPI(path,body,{origin,key}){
    method:body===undefined?'GET':'POST',
    headers:{Authorization:'Bearer '+key,...(body===undefined?{}:{'Content-Type':'application/json'})},
    body:body===undefined?undefined:JSON.stringify(body),
-   credentials:'omit',cache:'no-store',redirect:'error',signal:AbortSignal.timeout(45000)
+   credentials:'omit',cache:'no-store',redirect:'error',signal:signal??AbortSignal.timeout(45000)
   });
  }catch{throw Error('The parking API could not be reached. No automatic retry was made.');}
  const result=await response.json().catch(()=>null);
