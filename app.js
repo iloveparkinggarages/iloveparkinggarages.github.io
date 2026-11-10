@@ -217,6 +217,15 @@ document.addEventListener('input',event=>{const field=event.target;if(field inst
 document.addEventListener('visibilitychange',()=>{if(document.hidden){clearSensitive();stopScan();}});window.addEventListener('pagehide',()=>{clearSensitive();stopScan();});
 window.addEventListener('unhandledrejection',event=>{event.preventDefault();toast('The operation could not finish. If a payment was submitted, verify it before retrying.');});
 async function boot(){try{await reload();}catch(e){$('#ticket-list').innerHTML='<div class="empty-state">Local storage is unavailable. Enable browser storage and reload. No payment can be made.</div>';showError(e);}}
+// Keep scrolling and ticket swipes while suppressing multi-touch zoom.
+for(const type of ['gesturestart','gesturechange']){
+ document.addEventListener(type,event=>event.preventDefault(),{passive:false});
+}
+for(const type of ['touchstart','touchmove']){
+ document.addEventListener(type,event=>{
+  if(event.touches.length>1)event.preventDefault();
+ },{passive:false});
+}
 hydrateIcons();
 void boot();
 })();
