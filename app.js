@@ -2,7 +2,7 @@
 'use strict';
 const {wireTicketSwipes,setTicketEditing,closeTicketSwipes}=window.ParkingSwipes;
 const {icon,hydrateIcons}=window.ParkingIcons;
-const {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR,apiConnected,requireAPI,connectParkingAPI,disconnectAPI}=window.ParkingCore;
+const {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR}=window.ParkingCore;
 const $=selector=>document.querySelector(selector),all=selector=>[...document.querySelectorAll(selector)];
 let currentView='tickets',editingTickets=false;
 let filter='all',tickets=[],vault=[],busy=false,activeTicket=null,scanStream=null,scanFrame=null,inactivity=null,toastTimer=null;
@@ -41,14 +41,31 @@ function renderTickets(){
  $('#edit-tickets').hidden=!visible.length;$('#edit-tickets').textContent=editingTickets?'Done':'Edit';$('#edit-tickets').setAttribute('aria-pressed',String(editingTickets));
 }
 function detail(id){const t=tickets.find(t=>t.id===id);if(!t)return;activeTicket=id;
- sheet(t.name||'Your parking ticket',`Saved ${date(t.createdAt)}`,`<div class="summary"><div><small>${t.status==='paid'?'Payment saved':'Saved amount due'}</small><strong>${t.quote||t.receipt?money(t.receipt?.amountPaid??t.quote?.amountDue):'Not checked'}</strong></div><span class="badge ${esc(t.status)}">${esc(statusLabel[t.status]||'Saved')}</span></div>${t.status==='waiting'?`<div class="notice amber">This ticket may be too new. Recheck ${t.recheckAt>Date.now()?`around ${esc(date(t.recheckAt))}`:'now'} for an updated price. Rechecking is manual.</div>`:''}${t.status==='uncertain'?'<div class="notice red">A payment was attempted. Verify the official receipt and card activity before paying elsewhere. This app will not retry this ticket.</div>':''}${t.lastError?`<div class="notice amber">${esc(t.lastError)}</div>`:''}<div class="detail-group"><div class="detail-line"><span>Facility</span><strong>${esc(t.facility||t.quote?.facilityName||'UTSA parking')}</strong></div><div class="detail-line"><span>Ticket</span><strong>${esc(t.quote?.ticketNumber||'Pending')}</strong></div><div class="detail-line"><span>Last checked</span><strong>${t.quotedAt?esc(date(t.quotedAt)):'Not checked yet'}</strong></div></div><div class="action-group">${t.status==='ready'?'<button id="checkout-button" class="button primary wide">Continue to payment <span data-icon="arrow-right"></span></button>':''}${!['paid','uncertain'].includes(t.status)?'<button id="recheck-button" class="button secondary wide"><span data-icon="refresh"></span>Recheck ticket</button>':''}<button id="qr-button" class="button secondary wide"><span data-icon="qrcode"></span>Show original ticket QR</button><div class="list-actions"><button id="rename-button" class="text-button"><span data-icon="pen"></span>Rename ticket</button><button id="delete-ticket" class="text-button destructive"><span data-icon="trash"></span>Delete ticket</button></div></div><p class="small-note">Keep the physical ticket and official receipt. The saved QR contains the original ticket code.</p>`);
+ sheet(t.name||'Your parking ticket',`Saved ${date(t.createdAt)}`,`<div class="summary"><div><small>${t.status==='paid'?'Payment saved':'Saved amount due'}</small><strong>${t.quote||t.receipt?money(t.receipt?.amountPaid??t.quote?.amountDue):'Not checked'}</strong></div><span class="badge ${esc(t.status)}">${esc(statusLabel[t.status]||'Saved')}</span></div>${t.status==='waiting'?`<div class="notice amber">This ticket may be too new. Recheck ${t.recheckAt>Date.now()?`around ${esc(date(t.recheckAt))}`:'now'} for an updated price. Rechecking is manual.</div>`:''}${t.status==='uncertain'?'<div class="notice red">A payment was attempted. Verify the official receipt and card activity before paying elsewhere. This app will not retry this ticket.</div>':''}${t.lastError?`<div class="notice amber">${esc(t.lastError)}</div>`:''}${t.status==='ready'&&!t.directMerchant&&!t.lastError?'<div class="notice amber">Recheck this ticket to get payment settings for this website.</div>':''}<div class="detail-group"><div class="detail-line"><span>Facility</span><strong>${esc(t.facility||t.quote?.facilityName||'UTSA parking')}</strong></div><div class="detail-line"><span>Ticket</span><strong>${esc(t.quote?.ticketNumber||'Pending')}</strong></div><div class="detail-line"><span>Last checked</span><strong>${t.quotedAt?esc(date(t.quotedAt)):'Not checked yet'}</strong></div></div><div class="action-group">${t.status==='ready'&&t.directMerchant?'<button id="checkout-button" class="button primary wide">Continue to payment <span data-icon="arrow-right"></span></button>':''}${!['paid','uncertain'].includes(t.status)?'<button id="recheck-button" class="button secondary wide"><span data-icon="refresh"></span>Recheck ticket</button>':''}<button id="qr-button" class="button secondary wide"><span data-icon="qrcode"></span>Show original ticket QR</button><div class="list-actions"><button id="rename-button" class="text-button"><span data-icon="pen"></span>Rename ticket</button><button id="delete-ticket" class="text-button destructive"><span data-icon="trash"></span>Delete ticket</button></div></div><p class="small-note">Keep the physical ticket and official receipt. The saved QR contains the original ticket code.</p>`);
  $('#checkout-button')?.addEventListener('click',()=>operation(()=>checkout(id)));$('#recheck-button')?.addEventListener('click',()=>{
   if(busy)return;
   const savedAmount=tickets.find(ticket=>ticket.id===id)?.quote?.amountDue;
   if(Number.isSafeInteger(savedAmount)&&savedAmount>0&&!confirm(`This ticket already has a saved price of ${money(savedAmount)}. Rechecking will request a new quote and may change the amount due. Recheck this ticket?`))return;
   operation(async()=>{await refreshTicket(id);detail(id);});
  });$('#qr-button').onclick=()=>showQR(t);
- $('#rename-button').onclick=()=>{const name=prompt('Ticket name',t.name||'');if(name!==null)operation(async()=>{t.name=name.trim().slice(0,80);await storeAction('tickets','put',t);await reload();detail(id);});};
+ $('#rename-button').onclick=()=>{
+  const name=prompt('Ticket name',t.name||'');
+  if(name===null)return;
+  operation(async()=>{
+   const rename=async()=>{
+    const saved=await storeAction('tickets','get',id);
+    if(!saved||saved.archived)return;
+    await storeAction('tickets','put',{...saved,name:name.trim().slice(0,80)});
+   };
+   if(navigator.locks)await navigator.locks.request('parkingpocket-payment-'+id,{ifAvailable:true},lock=>{
+    if(!lock)throw Error('This ticket is being processed in another tab.');
+    return rename();
+   });
+   else await rename();
+   await reload();
+   detail(id);
+  });
+ };
  $('#delete-ticket').onclick=()=>deleteTicket(id);
 }
 function deleteTicket(id){
@@ -68,20 +85,24 @@ function deleteTicket(id){
 }
 function showQR(t){sheet('Your original ticket',t.name||'Keep your physical ticket',`<div class="qr-wrap"><canvas id="ticket-qr"></canvas><p>${esc(t.originalURL)}</p></div><p class="small-note">This is the exact original ticket link. Use the official receipt to verify payment.</p><button id="back-detail" class="button secondary wide">Back to ticket</button><button id="qr-delete-ticket" class="button danger wide"><span data-icon="trash"></span>Delete ticket</button>`);const qr=window.qrcode(0,'M');qr.addData(t.originalURL);qr.make();const canvas=$('#ticket-qr'),size=qr.getModuleCount(),scale=Math.max(2,Math.floor(300/(size+8)));canvas.width=canvas.height=(size+8)*scale;const ctx=canvas.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.fillStyle='#000';for(let row=0;row<size;row++)for(let col=0;col<size;col++)if(qr.isDark(row,col))ctx.fillRect((col+4)*scale,(row+4)*scale,scale,scale);$('#back-detail').onclick=()=>detail(t.id);$('#qr-delete-ticket').onclick=()=>deleteTicket(t.id);}
 async function refreshTicket(id){
- requireAPI();
  const refresh=async()=>{
   const ticket=await storeAction('tickets','get',id);
   if(!ticket||ticket.demo||ticket.archived||ticket.attemptAt||['paid','uncertain'].includes(ticket.status))
    throw Error('This ticket cannot be refreshed.');
 
   let quote;
-  try{quote=validateQuote(await api('pricing',{barcodeData:ticket.barcode}));}
+  try{
+   const response=validateQuote(await api('pricing',{barcodeData:ticket.barcode}));
+   quote=Object.fromEntries(['amountDue','parkingAmountDue','transactionFee','taxes','transactionUuid','ticketNumber','validations','facilityName','entryDateTime']
+    .filter(key=>Object.hasOwn(response,key)).map(key=>[key,response[key]]));
+  }
   catch(error){
    ticket.lastError=error.message;
+   delete ticket.directMerchant;
    if(!ticket.quote)ticket.status='error';
    await storeAction('tickets','put',ticket);
    await reload();
-   throw error;
+   return;
   }
   ticket.quote=quote;
   ticket.facility=quote.facilityName;
@@ -89,6 +110,15 @@ async function refreshTicket(id){
   ticket.status=quote.amountDue===0?'waiting':'ready';
   if(ticket.status==='waiting')ticket.recheckAt=recheckAt(ticket,quote);
   delete ticket.lastError;
+  delete ticket.directMerchant;
+  if(quote.amountDue>0){
+   try{
+    validateQuote(quote,true);
+    ticket.directMerchant=merchantFrom(await api('customer'));
+   }catch(error){
+    ticket.lastError=error.message;
+   }
+  }
   await storeAction('tickets','put',ticket);
   await reload();
  };
@@ -100,7 +130,38 @@ async function refreshTicket(id){
  }else await refresh();
 }
 function addTicket(){sheet('Add a ticket','UTSA parking',`<form id="add-form"><label for="ticket-url">Ticket link</label><input id="ticket-url" type="url" inputmode="url" placeholder="https://t2mpof.com/2595/…" required autocomplete="off"><label for="ticket-name">A name for this stop <span>(optional)</span></label><input id="ticket-name" maxlength="80" placeholder="Afternoon on campus" autocomplete="off"><div class="scan-controls"><button type="button" id="camera" class="button secondary"><span data-icon="camera"></span> Scan QR</button><label class="button secondary file-label"><span data-icon="image"></span> Choose photo<input id="ticket-photo" type="file" accept="image/*"></label></div><video id="scanner" class="scanner-video" playsinline muted hidden></video><p id="scan-note" class="small-note">Scan a QR, select a ticket photo, or paste its full link. Photos stay on this device.</p><button class="button primary wide" type="submit">Save ticket <span data-icon="arrow-right"></span></button></form>`);
- $('#add-form').onsubmit=event=>{event.preventDefault();operation(async()=>{const parsed=parseTicket($('#ticket-url').value),name=$('#ticket-name').value.trim();let t=tickets.find(t=>t.barcode===parsed.barcode&&t.customer===parsed.customer);if(t){t.archived=false;await storeAction('tickets','put',t);await reload();detail(t.id);toast('Opened your saved ticket.');return;}t={id:crypto.randomUUID(),...parsed,name,status:'saved',createdAt:Date.now()};await storeAction('tickets','put',t);await reload();if(apiConnected()){try{await refreshTicket(t.id);}catch{}}detail(t.id);});};
+ $('#add-form').onsubmit=event=>{
+  event.preventDefault();
+  operation(async()=>{
+   const parsed=parseTicket($('#ticket-url').value);
+   const name=$('#ticket-name').value.trim();
+   const save=async()=>{
+    const records=await storeAction('tickets','getAll');
+    const prior=records.find(t=>!t.demo&&t.barcode===parsed.barcode&&t.customer===parsed.customer);
+    if(prior){
+     if(prior.archived){
+      const restore=async()=>{
+       const saved=await storeAction('tickets','get',prior.id);
+       if(saved?.archived)await storeAction('tickets','put',{...saved,archived:false});
+      };
+      if(navigator.locks)await navigator.locks.request('parkingpocket-payment-'+prior.id,restore);
+      else await restore();
+     }
+     return {id:prior.id,created:false};
+    }
+    const id=crypto.randomUUID();
+    await storeAction('tickets','put',{id,...parsed,name,status:'saved',createdAt:Date.now()});
+    return {id,created:true};
+   };
+   const {id,created}=navigator.locks
+    ?await navigator.locks.request('parkingpocket-ticket-add',save)
+    :await save();
+   await reload();
+   if(created)await refreshTicket(id);
+   detail(id);
+   if(!created)toast('Opened your saved ticket.');
+  });
+ };
  $('#camera').onclick=()=>startCamera();$('#ticket-photo').onchange=event=>readPhoto(event.target.files?.[0]);
 }
 function acceptScan(value){try{parseTicket(value);$('#ticket-url').value=value;$('#scan-note').textContent='Ticket found. Give it a name and save when you’re ready.';stopScan();$('#scanner').hidden=true;toast('Ticket link found.');return true;}catch{return false;}}
@@ -118,18 +179,17 @@ async function unlockRecord(record,password){
  return result;
 }
 async function checkout(id){
- requireAPI();
  const t=await storeAction('tickets','get',id);
  if(!t||t.demo||t.archived||t.attemptAt||t.status!=='ready')throw Error('This ticket is unavailable for payment.');
  validateQuote(t.quote,true);
- // Fetch processor settings only. The price and transaction ID come from the saved quote.
- const merchant=merchantFrom(await api('customer'));
+ // The original Python flow uses the saved quote and merchant settings at checkout.
+ if(!t.directMerchant)throw Error('Recheck this ticket to get a price and payment settings directly from the parking API.');
  const items=await storeAction('vault','getAll');
  sheet('Payment',t.name||'Your ticket',`<div class="summary"><div><small>Ticket ${esc(t.quote.ticketNumber)}</small><strong>${money(t.quote.amountDue)}</strong></div><span class="badge ready">Amount due</span></div><h3 class="group-title">Payment method</h3><div class="payment-options">${items.map((item,index)=>`<button type="button" class="payment-option" data-use-card="${esc(item.id)}"><span>${esc(cardCaption(item,index))}</span><span aria-hidden="true">${icon('chevron-right')}</span></button>`).join('')}<button type="button" id="manual-card" class="payment-option"><span>AutoFill or enter a card</span><span aria-hidden="true">${icon('chevron-right')}</span></button></div><div id="unlock-panel"></div><div id="payment-entry" ${items.length?'hidden':''}><p id="chosen-card" class="small-note">AutoFill or enter a card.</p><form id="pay-form" autocomplete="on">${cardFields('pay')}<p class="small-note">Security code is not saved.</p><label for="pay-confirm"><input id="pay-confirm" type="checkbox" required> Confirm ${money(t.quote.amountDue)} for this ticket.</label><button class="button primary wide" type="submit">Pay ${money(t.quote.amountDue)}</button></form></div><div id="payment-status" class="small-note" role="status"></div>`);
  $('#manual-card').onclick=()=>{clearSensitive();$('#unlock-panel').replaceChildren();$('#payment-entry').hidden=false;$('#pay-confirm').checked=false;$('#chosen-card').textContent='AutoFill or enter a card.';all('[data-use-card]').forEach(x=>x.classList.remove('selected'));$('#manual-card').classList.add('selected');$('#pay-number').focus();resetInactivity();};
  all('[data-use-card]').forEach(button=>button.onclick=()=>{all('.payment-option').forEach(x=>x.classList.toggle('selected',x===button));unlockForCheckout(items.find(item=>item.id===button.dataset.useCard),items.findIndex(item=>item.id===button.dataset.useCard));});
  $('#pay-form').oninput=resetInactivity;
- $('#pay-form').onsubmit=event=>{event.preventDefault();operation(async()=>{const card=validateCard(cardInput('pay')),cvv=validateCVV($('#pay-cvv').value,card.brand);if(!$('#pay-confirm').checked)throw Error('Confirm the ticket and total first.');await submitPayment(t,card,cvv,merchant);});};
+ $('#pay-form').onsubmit=event=>{event.preventDefault();operation(async()=>{const card=validateCard(cardInput('pay')),cvv=validateCVV($('#pay-cvv').value,card.brand);if(!$('#pay-confirm').checked)throw Error('Confirm the ticket and total first.');await submitPayment(t,card,cvv);});};
  if(!items.length)$('#manual-card').classList.add('selected');resetInactivity();
 }
 function unlockForCheckout(record,index){
@@ -137,15 +197,14 @@ function unlockForCheckout(record,index){
  const panel=$('#unlock-panel');panel.innerHTML=`<form id="unlock-form"><label for="unlock-password">Passcode for ${esc(record.summary?.label||'saved card '+(index+1))}</label><input id="unlock-password" type="password" autocomplete="off" data-sensitive required placeholder="Enter passcode"><button id="unlock-now" type="submit" class="button primary wide">Unlock card</button><p id="unlock-error" class="small-note" role="alert"></p></form>`;
  $('#unlock-password').focus();$('#unlock-form').onsubmit=event=>{event.preventDefault();operation(async()=>{const password=$('#unlock-password').value;$('#unlock-password').value='';try{const result=await unlockRecord(record,password);$('#payment-entry').hidden=false;$('#chosen-card').textContent=`${result.label} · ${result.card.brand} •••• ${result.card.number.slice(-4)}`;applyCard(result.card,'pay');panel.replaceChildren();}catch(e){$('#unlock-error').textContent=e.message;}});};
 }
-async function submitPayment(ticket,card,cvv,merchant){
- requireAPI();
+async function submitPayment(ticket,card,cvv){
  if(!navigator.locks)throw Error('Use a browser that can coordinate payments across tabs.');
  await navigator.locks.request('parkingpocket-payment-'+ticket.id,{ifAvailable:true},async lock=>{
   if(!lock)throw Error('This ticket is being processed in another tab.');
-  const fresh=await storeAction('tickets','get',ticket.id);if(!fresh||fresh.demo||fresh.archived||fresh.status!=='ready'||fresh.attemptAt)throw Error('This ticket is no longer available for payment.');
+  const fresh=await storeAction('tickets','get',ticket.id);if(!fresh||fresh.demo||fresh.archived||fresh.status!=='ready'||fresh.attemptAt||!fresh.directMerchant)throw Error('This ticket is no longer available for payment.');
   validateQuote(fresh.quote,true);if(fresh.quote.transactionUuid!==ticket.quote.transactionUuid||fresh.quote.amountDue!==ticket.quote.amountDue)throw Error('The quote changed in another tab. Reopen and confirm the updated amount.');
   $('#payment-status').textContent='Protecting card details…';let opaque;
-  try{const response=await fetch(PROCESSOR,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(processorPayload(card,cvv,merchant)),credentials:'omit',cache:'no-store',redirect:'error',signal:AbortSignal.timeout(45000)});const result=await response.json();if(!response.ok||result.messages?.resultCode!=='Ok'||result.opaqueData?.dataDescriptor!=='COMMON.ACCEPT.INAPP.PAYMENT'||!result.opaqueData?.dataValue)throw Error();opaque=result.opaqueData;}catch{throw Error('Card tokenization failed. No parking payment was submitted. Review the card details before trying again.');}finally{clearSensitive();}
+  try{const response=await fetch(PROCESSOR,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(processorPayload(card,cvv,fresh.directMerchant)),credentials:'omit',cache:'no-store',redirect:'error',signal:AbortSignal.timeout(45000)});const result=await response.json();if(!response.ok||result.messages?.resultCode!=='Ok'||result.opaqueData?.dataDescriptor!=='COMMON.ACCEPT.INAPP.PAYMENT'||!result.opaqueData?.dataValue)throw Error();opaque=result.opaqueData;}catch{throw Error('Card tokenization failed. No parking payment was submitted. Review the card details before trying again.');}finally{clearSensitive();}
   $('#payment-status').textContent='Registering the payment token…';const registered=await api('tokens',{paymentProvider:'AUTH_NET_LIGHT',transactionUuid:fresh.quote.transactionUuid,providerInstrumentId:opaque.dataValue});if(typeof registered.cardTokenUuid!=='string'||!registered.cardTokenUuid)throw Error('No payment token returned. No parking payment was submitted.');
   const q=fresh.quote,payload={barcodeData:fresh.barcode,totalAmountPaid:q.amountDue,parkingAmount:q.parkingAmountDue,taxes:q.taxes,transactionUuid:q.transactionUuid,paymentProvider:'AUTH_NET_LIGHT',providerInstrumentId:opaque.dataValue,paymentDateTime:new Date().toISOString(),cardTokenUuid:registered.cardTokenUuid,paymentDetails:{brand:card.brand,lastFour:card.number.slice(-4),expirationMonth:card.month,expirationYear:card.year}};
   // Persist before the only charge request. A reload, crash, timeout, or failure stays blocked.
@@ -158,37 +217,15 @@ function renderVault(){const container=$('#vault-body');container.innerHTML=`${v
  $('#new-vault-card').onclick=saveVaultForm;all('[data-delete-vault]').forEach(button=>button.onclick=()=>{if(confirm('Delete this saved card?'))operation(async()=>{await storeAction('vault','delete',button.dataset.deleteVault);await reload();renderVault();});});all('[data-inspect]').forEach(button=>button.onclick=()=>inspectVault(button.dataset.inspect));}
 function saveVaultForm(){sheet('New payment method','Saved on this device',`<form id="vault-form" autocomplete="on"><label for="vault-label">Card name</label><input id="vault-label" maxlength="60" placeholder="My card" autocomplete="off">${cardFields('vault')}<label for="new-passcode">Passcode</label><input id="new-passcode" type="password" autocomplete="new-password" data-sensitive required placeholder="Choose a passcode"><label for="confirm-passcode">Confirm passcode</label><input id="confirm-passcode" type="password" autocomplete="new-password" data-sensitive required><p class="small-note">Your passcode cannot be recovered. Security code is not saved.</p><button class="button primary wide" type="submit">Save card</button></form>`);$('#vault-cvv').closest('.field-row').querySelector('div:last-child').hidden=true;$('#vault-cvv').value='';$('#vault-form').onsubmit=event=>{event.preventDefault();operation(async()=>{const password=$('#new-passcode').value;if(password!==$('#confirm-passcode').value)throw Error('The passcodes do not match.');const record=await encryptCard(cardInput('vault'),password,$('#vault-label').value);await storeAction('vault','put',record);clearSensitive();await reload();renderVault();busy=false;closeSheet();toast('Card saved.');});};}
 function inspectVault(id){sheet('Unlock card','Enter the passcode for this card',`<form id="inspect-form"><label for="inspect-passcode">Passcode</label><input id="inspect-passcode" type="password" autocomplete="off" required data-sensitive><button class="button primary wide">Unlock</button></form><div id="inspect-result" role="status"></div>`);$('#inspect-form').onsubmit=event=>{event.preventDefault();operation(async()=>{const password=$('#inspect-passcode').value;$('#inspect-passcode').value='';$('#inspect-result').replaceChildren();const {card,label}=await unlockRecord(vault.find(item=>item.id===id),password);renderVault();$('#inspect-result').innerHTML=`<div class="notice"><strong>${esc(label)}</strong><br>${esc(card.brand)} · •••• ${esc(card.number.slice(-4))}<br>Expires ${card.month} / ${card.year}</div>`;});};}
-function privacy(){sheet('Privacy','Card storage and payments',`<div class="notice">AutoFill is the default. Saving a card in this app is optional.</div><h3>On this device</h3><p class="small-note">Tickets and encrypted vault records live in IndexedDB. The vault uses AES-256-GCM with a random salt and nonce, and a PBKDF2-SHA-256 key derived from your passcode (600,000 iterations). The key and passcode are not saved. A wrong passcode or modified record fails authentication before any card fields are filled.</p><h3>When you pay</h3><p class="small-note">Card details are sent directly to Authorize.net for tokenization. Your API Worker receives the ticket, payment token, amount, and masked card metadata. CVV is never saved by the app. No card data is put in cookies, URLs, app logs, or backups.</p><h3>What encryption cannot do</h3><p class="small-note">A short PIN can be guessed offline. Malicious JavaScript or a compromised device can read details while you enter or decrypt them. Browser storage may be cleared. This prototype has not undergone a payment security audit.</p>`);}
-function connectAPI(){
- sheet('Connect parking API','Enter the access key for your Worker',`
-  <form id="api-connect-form" autocomplete="off">
-   <label for="api-key">API access key</label>
-   <input id="api-key" type="password" autocomplete="off" data-sensitive required>
-   <button class="button primary wide" type="submit">Connect</button>
-  </form>
-  <p class="small-note">The key stays in this tab until you reload or leave the page.</p>
- `);
- $('#api-connect-form').onsubmit=event=>{
-  event.preventDefault();
-  operation(async()=>{
-   const key=$('#api-key').value.trim();
-   $('#api-key').value='';
-   await connectParkingAPI(key);
-   
-   busy=false;
-   closeSheet();
-   toast('Parking API connected.');
-  });
- };
-}
+function privacy(){sheet('Privacy','Card storage and payments',`<div class="notice">AutoFill is the default. Saving a card in this app is optional.</div><h3>On this device</h3><p class="small-note">Tickets and encrypted vault records live in IndexedDB. The vault uses AES-256-GCM with a random salt and nonce, and a PBKDF2-SHA-256 key derived from your passcode (600,000 iterations). The key and passcode are not saved. A wrong passcode or modified record fails authentication before any card fields are filled.</p><h3>When you pay</h3><p class="small-note">Card details are sent directly to Authorize.net for tokenization. The parking API receives the ticket, payment token, amount, and masked card metadata. CVV is never saved by the app. No card data is put in cookies, URLs, app logs, or backups.</p><h3>What encryption cannot do</h3><p class="small-note">A short PIN can be guessed offline. Malicious JavaScript or a compromised device can read details while you enter or decrypt them. Browser storage may be cleared. This prototype has not undergone a payment security audit.</p>`);}
 $('#edit-tickets').onclick=()=>{if(busy)return;editingTickets=!editingTickets;$('#ticket-list').dataset.editing=String(editingTickets);setTicketEditing($('#ticket-list'),editingTickets);$('#edit-tickets').textContent=editingTickets?'Done':'Edit';$('#edit-tickets').setAttribute('aria-pressed',String(editingTickets));};
 $('#toolbar-left').onclick=()=>setView(currentView==='tickets'?'vault':'tickets');$('#toolbar-add').onclick=saveVaultForm;$('#settings-shortcut').onclick=()=>setView('settings');
 const appearance=$('#appearance');appearance.value=window.ParkingAppearance.get();appearance.onchange=()=>window.ParkingAppearance.set(appearance.value);window.addEventListener('parking-appearance',()=>{appearance.value=window.ParkingAppearance.get();});
 $('#close-sheet').onclick=closeSheet;$('#sheet').addEventListener('cancel',event=>{event.preventDefault();closeSheet();});$('#sheet').addEventListener('click',event=>{if(event.target===$('#sheet')){const r=$('#sheet').getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)closeSheet();}});
-all('.nav-item').forEach(button=>button.onclick=()=>setView(button.dataset.view));all('[data-filter]').forEach(button=>button.onclick=()=>{filter=button.dataset.filter;all('[data-filter]').forEach(x=>x.classList.toggle('active',x===button));renderTickets();});$('#add-ticket').onclick=addTicket;$('#privacy-button').onclick=privacy;$('#api-connect').onclick=connectAPI;$('#autofill-help').onclick=()=>{sheet('Card AutoFill','Use the cards you already saved',`<div class="notice">Open the card number field at checkout. Choose the card suggestion, or touch and hold → AutoFill → Credit Card if iOS offers it.</div><p class="small-note">The card must be saved for AutoFill in Wallet / Safari settings; Apple Pay enrollment alone may not include the details needed for AutoFill. iOS decides when Face ID is required. Fill any missing fields and review the card before paying.</p><p class="small-note">Prefer a passcode? Add a card to the optional encrypted vault. The app will ask for the passcode before filling it. The security code is never stored by this app.</p>`);};
+all('.nav-item').forEach(button=>button.onclick=()=>setView(button.dataset.view));all('[data-filter]').forEach(button=>button.onclick=()=>{filter=button.dataset.filter;all('[data-filter]').forEach(x=>x.classList.toggle('active',x===button));renderTickets();});$('#add-ticket').onclick=addTicket;$('#privacy-button').onclick=privacy;$('#autofill-help').onclick=()=>{sheet('Card AutoFill','Use the cards you already saved',`<div class="notice">Open the card number field at checkout. Choose the card suggestion, or touch and hold → AutoFill → Credit Card if iOS offers it.</div><p class="small-note">The card must be saved for AutoFill in Wallet / Safari settings; Apple Pay enrollment alone may not include the details needed for AutoFill. iOS decides when Face ID is required. Fill any missing fields and review the card before paying.</p><p class="small-note">Prefer a passcode? Add a card to the optional encrypted vault. The app will ask for the passcode before filling it. The security code is never stored by this app.</p>`);};
 $('#clear-data').onclick=()=>{if(confirm('Erase all local tickets, duplicate-payment safeguards, and encrypted cards? This cannot be undone.'))operation(async()=>{for(const store of ['tickets','vault','preferences'])await storeAction(store,'clear');await reload();renderVault();toast('Local data erased.');});};
 document.addEventListener('input',event=>{const field=event.target;if(field instanceof HTMLInputElement&&field.id.endsWith('-expiration')&&event.isTrusted){const digits=field.value.replace(/[^0-9]/g,'').slice(0,6);field.value=digits.length>2?digits.slice(0,2)+' / '+digits.slice(2):digits;}});
-document.addEventListener('visibilitychange',()=>{if(document.hidden){clearSensitive();stopScan();}});window.addEventListener('pagehide',()=>{clearSensitive();stopScan();disconnectAPI();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){clearSensitive();stopScan();}});window.addEventListener('pagehide',()=>{clearSensitive();stopScan();});
 window.addEventListener('unhandledrejection',event=>{event.preventDefault();toast('The operation could not finish. If a payment was submitted, verify it before retrying.');});
 async function boot(){try{await reload();}catch(e){$('#ticket-list').innerHTML='<div class="empty-state">Local storage is unavailable. Enable browser storage and reload. No payment can be made.</div>';showError(e);}}
 hydrateIcons();

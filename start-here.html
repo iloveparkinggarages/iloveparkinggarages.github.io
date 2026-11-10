@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ParkingPocket setup</title></head>
+<body>
+<h1>ParkingPocket for GitHub Pages</h1>
+<ol>
+ <li>Extract this ZIP and upload the contents of <code>ParkingPocket-GitHub-Pages</code> to the repository root. Keep <code>index.html</code> at the top level and keep the <code>vendor</code> folder intact.</li>
+ <li>In your repository, go to <strong>Settings → Pages</strong>. Choose <strong>Deploy from a branch</strong>, then select <code>main</code> and <code>/(root)</code>.</li>
+ <li>Open your published HTTPS address. Use <strong>Add Ticket</strong> to scan a QR, import a photo, or paste a UTSA ticket URL.</li>
+</ol>
+<p>The app keeps tickets on this device and shows the saved QR inside the app. A supported price lookup saves the quote, transaction ID, and payment settings. Checkout uses those saved values and talks directly to Authorize.net and the parking API.</p>
+<p><strong>Live API limit.</strong> The pricing API returned HTTP 403 to a browser preflight for <code>https://iloveparkinggarages.github.io</code>. Ticket scanning and local storage work. Live recheck and checkout require the parking service to allow requests from that origin. The ZIP includes the direct API code and does not redirect to the parking site.</p>
+<p><a href="./index.html">Open ParkingPocket</a></p>
+</body>
+</html>
