@@ -58,7 +58,9 @@ function merchantFrom(customer){const attrs={};for(const a of Array.isArray(cust
  if(attrs['Card Payment Processor']!=='AUTH_NET'||!attrs['Authorize.NET API Key']||!attrs['Authorize.Net: Public Key'])throw Error('This location has no supported card processor settings.');return {name:attrs['Authorize.NET API Key'],clientKey:attrs['Authorize.Net: Public Key']};}
 function recheckAt(ticket,q){let time=Date.parse(q?.entryDateTime);if(!Number.isFinite(time))time=ticket.recheckAt?ticket.recheckAt-900000:ticket.createdAt;return Math.min(Date.now()+900000,Math.max(Date.now(),time+900000));}
 
-let accessKey='';
+const API_KEY_STORAGE='parkingpocket-worker-credential';
+const API_KEY_PATTERN=/^[a-f0-9]{64}$/i;
+let sessionCredential=null;
 
 function workerOrigin(){
  const configured=window.ParkingPocketConfig?.apiOrigin?.trim();
@@ -70,19 +72,45 @@ function workerOrigin(){
   throw Error('Use the HTTPS workers.dev origin for your Worker.');
  return url.origin;
 }
-function apiConnected(){return accessKey.length>0;}
+function credentialFor(origin){
+ if(sessionCredential?.origin===origin)return sessionCredential;
+ try{
+  const stored=JSON.parse(window.localStorage.getItem(API_KEY_STORAGE));
+  if(stored?.origin===origin&&typeof stored.key==='string'&&API_KEY_PATTERN.test(stored.key))return stored;
+ }catch{
+  // Some browser modes do not allow access to persistent storage.
+ }
+ return null;
+}
+function apiConnected(){
+ try{return credentialFor(workerOrigin())!==null;}catch{return false;}
+}
 function requireAPI(){
- if(!apiConnected())throw Error('Connect the parking API in Settings first.');
+ const credential=credentialFor(workerOrigin());
+ if(!credential)throw Error('Connect the parking API in Settings first.');
+ return credential;
 }
-function disconnectAPI(){accessKey='';}
+function disconnectAPI(){
+ sessionCredential=null;
+ try{window.localStorage.removeItem(API_KEY_STORAGE);}
+ catch{throw Error('Could not remove the saved key. Clear website data in your browser settings.');}
+}
 async function connectParkingAPI(key){
- if(!/^[a-f0-9]{64}$/i.test(key))throw Error('Enter your 64-character API access key.');
- const result=await requestAPI('health',undefined,key);
+ if(typeof key!=='string'||!API_KEY_PATTERN.test(key))throw Error('Enter your 64-character API access key.');
+ const credential={origin:workerOrigin(),key};
+ const result=await requestAPI('health',undefined,credential);
  if(result.status!=='ready')throw Error('The parking API is unavailable.');
- accessKey=key;
+ try{
+  window.localStorage.setItem(API_KEY_STORAGE,JSON.stringify(credential));
+  sessionCredential=null;
+  return true;
+ }catch{
+  sessionCredential=credential;
+  return false;
+ }
 }
-async function requestAPI(path,body,key){
- const url=workerOrigin()+'/api/'+path;
+async function requestAPI(path,body,{origin,key}){
+ const url=origin+'/api/'+path;
  let response;
  try{
   response=await fetch(url,{
@@ -97,8 +125,7 @@ async function requestAPI(path,body,key){
  return result;
 }
 async function api(path,body){
- requireAPI();
- return requestAPI(path,body,accessKey);
+ return requestAPI(path,body,requireAPI());
 }
 
 return {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR,apiConnected,requireAPI,connectParkingAPI,disconnectAPI};

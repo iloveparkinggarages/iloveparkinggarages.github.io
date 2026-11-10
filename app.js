@@ -166,18 +166,17 @@ function connectAPI(){
    <input id="api-key" type="password" autocomplete="off" data-sensitive required>
    <button class="button primary wide" type="submit">Connect</button>
   </form>
-  <p class="small-note">The key stays in this tab until you reload or leave the page.</p>
+  <p class="small-note">Your browser remembers the key for this Worker on this device. Use Settings → Forget API key to remove it.</p>
  `);
  $('#api-connect-form').onsubmit=event=>{
   event.preventDefault();
   operation(async()=>{
    const key=$('#api-key').value.trim();
    $('#api-key').value='';
-   await connectParkingAPI(key);
-   
+   const remembered=await connectParkingAPI(key);
    busy=false;
    closeSheet();
-   toast('Parking API connected.');
+   toast(remembered?'Parking API connected. Key remembered on this device.':'Parking API connected for this tab. Browser storage is unavailable.');
   });
  };
 }
@@ -186,9 +185,13 @@ $('#toolbar-left').onclick=()=>setView(currentView==='tickets'?'vault':'tickets'
 const appearance=$('#appearance');appearance.value=window.ParkingAppearance.get();appearance.onchange=()=>window.ParkingAppearance.set(appearance.value);window.addEventListener('parking-appearance',()=>{appearance.value=window.ParkingAppearance.get();});
 $('#close-sheet').onclick=closeSheet;$('#sheet').addEventListener('cancel',event=>{event.preventDefault();closeSheet();});$('#sheet').addEventListener('click',event=>{if(event.target===$('#sheet')){const r=$('#sheet').getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)closeSheet();}});
 all('.nav-item').forEach(button=>button.onclick=()=>setView(button.dataset.view));all('[data-filter]').forEach(button=>button.onclick=()=>{filter=button.dataset.filter;all('[data-filter]').forEach(x=>x.classList.toggle('active',x===button));renderTickets();});$('#add-ticket').onclick=addTicket;$('#privacy-button').onclick=privacy;$('#api-connect').onclick=connectAPI;$('#autofill-help').onclick=()=>{sheet('Card AutoFill','Use the cards you already saved',`<div class="notice">Open the card number field at checkout. Choose the card suggestion, or touch and hold → AutoFill → Credit Card if iOS offers it.</div><p class="small-note">The card must be saved for AutoFill in Wallet / Safari settings; Apple Pay enrollment alone may not include the details needed for AutoFill. iOS decides when Face ID is required. Fill any missing fields and review the card before paying.</p><p class="small-note">Prefer a passcode? Add a card to the optional encrypted vault. The app will ask for the passcode before filling it. The security code is never stored by this app.</p>`);};
-$('#clear-data').onclick=()=>{if(confirm('Erase all local tickets, duplicate-payment safeguards, and encrypted cards? This cannot be undone.'))operation(async()=>{for(const store of ['tickets','vault','preferences'])await storeAction(store,'clear');await reload();renderVault();toast('Local data erased.');});};
+$('#forget-api-key').onclick=()=>operation(async()=>{
+ disconnectAPI();
+ toast('API key forgotten.');
+});
+$('#clear-data').onclick=()=>{if(confirm('Erase all local tickets, duplicate-payment safeguards, encrypted cards, and the saved API key? This cannot be undone.'))operation(async()=>{for(const store of ['tickets','vault','preferences'])await storeAction(store,'clear');await reload();renderVault();disconnectAPI();toast('Local data erased.');});};
 document.addEventListener('input',event=>{const field=event.target;if(field instanceof HTMLInputElement&&field.id.endsWith('-expiration')&&event.isTrusted){const digits=field.value.replace(/[^0-9]/g,'').slice(0,6);field.value=digits.length>2?digits.slice(0,2)+' / '+digits.slice(2):digits;}});
-document.addEventListener('visibilitychange',()=>{if(document.hidden){clearSensitive();stopScan();}});window.addEventListener('pagehide',()=>{clearSensitive();stopScan();disconnectAPI();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){clearSensitive();stopScan();}});window.addEventListener('pagehide',()=>{clearSensitive();stopScan();});
 window.addEventListener('unhandledrejection',event=>{event.preventDefault();toast('The operation could not finish. If a payment was submitted, verify it before retrying.');});
 async function boot(){try{await reload();}catch(e){$('#ticket-list').innerHTML='<div class="empty-state">Local storage is unavailable. Enable browser storage and reload. No payment can be made.</div>';showError(e);}}
 hydrateIcons();
