@@ -1,17 +1,10 @@
 window.ParkingCore=(()=>{
 'use strict';
-const PARKING_API='https://auth-gateway.prod.link.t2systems.com/api/v1';
-const API_ROUTES=Object.freeze({
- pricing:'/pof/pricing/2595',
- customer:'/customers/2595',
- tokens:'/pof/payments/tokens/2595',
- payments:'/pof/payments/2595'
-});
 const PROCESSOR='https://api2.authorize.net/xml/v1/request.api';
 const money=cents=>new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format((cents||0)/100);
 const esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function parseTicket(input){
- const originalURL=String(input).trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g,'').trim();let url;try{url=new URL(originalURL);}catch{throw Error('Paste the full HTTPS ticket link.');}
+ const originalURL=String(input).trim();let url;try{url=new URL(originalURL);}catch{throw Error('Paste the full HTTPS ticket link.');}
  const match=url.pathname.match(/^\/([0-9]{1,10})\/([A-Za-z0-9]{1,512})\/?$/);
  if(url.protocol!=='https:'||url.hostname!=='t2mpof.com'||url.username||url.password||url.port||url.search||url.hash||!match||match[1]!=='2595')throw Error('Use a T2MPOF.COM ticket link for UTSA (customer 2595).');
  return {originalURL,customer:match[1],barcode:match[2]};
@@ -65,30 +58,48 @@ function merchantFrom(customer){const attrs={};for(const a of Array.isArray(cust
  if(attrs['Card Payment Processor']!=='AUTH_NET'||!attrs['Authorize.NET API Key']||!attrs['Authorize.Net: Public Key'])throw Error('This location has no supported card processor settings.');return {name:attrs['Authorize.NET API Key'],clientKey:attrs['Authorize.Net: Public Key']};}
 function recheckAt(ticket,q){let time=Date.parse(q?.entryDateTime);if(!Number.isFinite(time))time=ticket.recheckAt?ticket.recheckAt-900000:ticket.createdAt;return Math.min(Date.now()+900000,Math.max(Date.now(),time+900000));}
 
-async function api(operation,body){
- if(!Object.hasOwn(API_ROUTES,operation))throw Error('Unsupported parking operation.');
- const isLookup=operation==='pricing'||operation==='customer';
+let accessKey='';
+
+function workerOrigin(){
+ const configured=window.ParkingPocketConfig?.apiOrigin?.trim();
+ if(!configured)throw Error('Set your Worker URL in api-config.js first.');
+ let url;
+ try{url=new URL(configured);}catch{throw Error('Enter a valid Worker URL in api-config.js.');}
+ if(url.protocol!=='https:'||url.username||url.password||url.port||url.pathname!=='/'||url.search||url.hash||
+    !/^[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev$/.test(url.hostname))
+  throw Error('Use the HTTPS workers.dev origin for your Worker.');
+ return url.origin;
+}
+function apiConnected(){return accessKey.length>0;}
+function requireAPI(){
+ if(!apiConnected())throw Error('Connect the parking API in Settings first.');
+}
+function disconnectAPI(){accessKey='';}
+async function connectParkingAPI(key){
+ if(!/^[a-f0-9]{64}$/i.test(key))throw Error('Enter your 64-character API access key.');
+ const result=await requestAPI('health',undefined,key);
+ if(result.status!=='ready')throw Error('The parking API is unavailable.');
+ accessKey=key;
+}
+async function requestAPI(path,body,key){
+ const url=workerOrigin()+'/api/'+path;
  let response;
  try{
-  response=await fetch(PARKING_API+API_ROUTES[operation],{
+  response=await fetch(url,{
    method:body===undefined?'GET':'POST',
-   headers:body===undefined?{Accept:'application/json'}:{Accept:'application/json','Content-Type':'application/json'},
+   headers:{Authorization:'Bearer '+key,...(body===undefined?{}:{'Content-Type':'application/json'})},
    body:body===undefined?undefined:JSON.stringify(body),
-   mode:'cors',credentials:'omit',cache:'no-store',redirect:'error',
-   signal:AbortSignal.timeout(45000)
+   credentials:'omit',cache:'no-store',redirect:'error',signal:AbortSignal.timeout(45000)
   });
- }catch{
-  if(operation==='payments')throw Error('The payment response could not be read. Verify the outcome before trying again.');
-  if(!isLookup)throw Error('The browser could not reach the parking token API. No parking payment was submitted.');
-  throw Error('This browser could not read the parking API response. The service must allow this website’s origin for direct price checks and payment setup.');
- }
- if(!response.ok)throw Error('Parking API returned HTTP '+response.status+'.');
+ }catch{throw Error('The parking API could not be reached. No automatic retry was made.');}
  const result=await response.json().catch(()=>null);
- const value=result?.response;
- if(result?.status?.responseStatus!=='Success'||!value||typeof value!=='object'||Array.isArray(value))
-  throw Error('The parking API did not return a usable '+(isLookup?'lookup':'payment')+' response.');
- return value;
+ if(!response.ok||!result||result.error)throw Error(result?.error||'Parking API request failed ('+response.status+').');
+ return result;
+}
+async function api(path,body){
+ requireAPI();
+ return requestAPI(path,body,accessKey);
 }
 
-return {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR};
+return {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR,apiConnected,requireAPI,connectParkingAPI,disconnectAPI};
 })();
