@@ -2,7 +2,7 @@
 'use strict';
 const {wireTicketSwipes,setTicketEditing,closeTicketSwipes}=window.ParkingSwipes;
 const {icon,hydrateIcons}=window.ParkingIcons;
-const {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR,apiConnected,requireAPI,connectParkingAPI,disconnectAPI,getVaultPasscode,setVaultPasscode,verifyVaultPasscode,MIN_PASSCODE}=window.ParkingCore;
+const {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR,apiConnected,requireAPI,connectParkingAPI,disconnectAPI,getVaultPasscode,setVaultPasscode,unlockVault,cachedVaultPasscode,forgetVaultPasscode,MIN_PASSCODE}=window.ParkingCore;
 const $=selector=>document.querySelector(selector),all=selector=>[...document.querySelectorAll(selector)];
 let currentView='tickets',editingTickets=false;
 let apiConnection=null;
@@ -136,7 +136,7 @@ async function checkout(id){
 }
 function unlockForCheckout(record){
  clearSensitive();$('#payment-entry').hidden=true;$('#pay-confirm').checked=false;
- const panel=$('#unlock-panel');panel.innerHTML=`<form id="unlock-form"><label for="unlock-password">Passcode</label><input id="unlock-password" type="password" autocomplete="off" data-sensitive required placeholder="Enter your card passcode"><p class="small-note">One passcode unlocks every card saved on this device.</p><button id="unlock-now" type="submit" class="button primary wide">Unlock card</button><p id="unlock-error" class="small-note" role="alert"></p></form>`;
+ const panel=$('#unlock-panel');panel.innerHTML=`<form id="unlock-form"><label for="unlock-password">Passcode</label><input id="unlock-password" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive required placeholder="Enter your card passcode"><p class="small-note">One passcode unlocks every card saved on this device.</p><button id="unlock-now" type="submit" class="button primary wide">Unlock card</button><p id="unlock-error" class="small-note" role="alert"></p></form>`;
  $('#unlock-password').focus();$('#unlock-form').onsubmit=event=>{event.preventDefault();operation(async()=>{const password=$('#unlock-password').value;$('#unlock-password').value='';try{const result=await unlockRecord(record,password);$('#payment-entry').hidden=false;$('#chosen-card').textContent=`${result.label} · ${result.card.brand} •••• ${result.card.number.slice(-4)}`;applyCard(result.card,'pay');panel.replaceChildren();}catch(e){$('#unlock-error').textContent=e.message;}});};
 }
 async function submitPayment(ticket,card,cvv,merchant){
@@ -160,16 +160,33 @@ function renderVault(){const container=$('#vault-body');container.innerHTML=`${v
  $('#new-vault-card').onclick=saveVaultForm;all('[data-delete-vault]').forEach(button=>button.onclick=()=>{if(confirm('Delete this saved card?'))operation(async()=>{await storeAction('vault','delete',button.dataset.deleteVault);await reload();renderVault();});});all('[data-inspect]').forEach(button=>button.onclick=()=>inspectVault(button.dataset.inspect));all('[data-edit-vault]').forEach(button=>button.onclick=()=>editVaultForm(button.dataset.editVault));const passcodeButton=$('#set-vault-passcode');if(passcodeButton)passcodeButton.onclick=()=>setOnePasscode();}
 function saveVaultForm(){
  if(vault.length&&!vaultPasscode){toast('Set one passcode for all your cards first.');setOnePasscode();return;}
- const choosing=!vaultPasscode||!vault.length;
- sheet('New payment method','Saved on this device',`<form id="vault-form" autocomplete="on"><label for="vault-label">Card name</label><input id="vault-label" maxlength="60" placeholder="My card" autocomplete="off">${cardFields('vault')}${choosing?`<label for="new-passcode">Choose a passcode</label><input id="new-passcode" type="password" autocomplete="new-password" data-sensitive required minlength="${MIN_PASSCODE}" placeholder="At least ${MIN_PASSCODE} characters"><label for="confirm-passcode">Confirm passcode</label><input id="confirm-passcode" type="password" autocomplete="new-password" data-sensitive required><p class="small-note">One passcode will protect every card you save. It cannot be recovered. Security code is not saved.</p>`:`<label for="vault-passcode">Passcode</label><input id="vault-passcode" type="password" autocomplete="off" data-sensitive required placeholder="Enter your card passcode"><p class="small-note">One passcode protects every card you save. Security code is not saved.</p>`}<button class="button primary wide" type="submit">Save card</button></form>`);$('#vault-cvv').closest('.field-row').querySelector('div:last-child').hidden=true;$('#vault-cvv').value='';
+ // The global passcode is applied automatically. Without saved cards there is
+ // nothing to unlock, so a new passcode can be chosen (this is the reset path).
+ if(!vault.length){addCardForm(null);return;}
+ const password=cachedVaultPasscode();
+ if(password){addCardForm(password);return;}
+ unlockForNewCard();
+}
+function unlockForNewCard(){
+ sheet('Unlock saved cards','Your card passcode is applied automatically',`<form id="new-card-unlock"><label for="new-card-passcode">Passcode</label><input id="new-card-passcode" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive required placeholder="Enter your card passcode"><p class="small-note">One passcode protects every card on this device. After this, new cards are saved with it without asking again this visit.</p><button class="button primary wide" type="submit">Continue</button></form>`);
+ $('#new-card-passcode').focus();
+ $('#new-card-unlock').onsubmit=event=>{event.preventDefault();operation(async()=>{
+  const password=$('#new-card-passcode').value;
+  if(!(await unlockVault(password)))throw Error('That passcode does not match the passcode for your saved cards.');
+  addCardForm(password);
+ });};
+}
+function addCardForm(password){
+ const choosing=!password;
+ sheet('New payment method','Saved on this device',`<form id="vault-form" autocomplete="on"><label for="vault-label">Card name</label><input id="vault-label" maxlength="60" placeholder="My card" autocomplete="off">${cardFields('vault')}${choosing?`<label for="new-passcode">Choose a passcode</label><input id="new-passcode" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive required minlength="${MIN_PASSCODE}" placeholder="At least ${MIN_PASSCODE} characters"><label for="confirm-passcode">Confirm passcode</label><input id="confirm-passcode" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive required><p class="small-note">One passcode will protect every card you save. It cannot be recovered. To replace it later without knowing it, remove all saved cards first.</p>`:`<p class="small-note">Your card passcode is applied automatically. Security code is not saved.</p>`}<button class="button primary wide" type="submit">Save card</button></form>`);$('#vault-cvv').closest('.field-row').querySelector('div:last-child').hidden=true;$('#vault-cvv').value='';
  $('#vault-form').onsubmit=event=>{event.preventDefault();operation(async()=>{
-  const password=choosing?$('#new-passcode').value:$('#vault-passcode').value;
+  const passphrase=choosing?$('#new-passcode').value:password;
   if(choosing){
-   if(password.length<MIN_PASSCODE)throw Error(`Choose a passcode of at least ${MIN_PASSCODE} characters.`);
-   if(password!==$('#confirm-passcode').value)throw Error('The passcodes do not match.');
-  }else if(!(await verifyVaultPasscode(password)))throw Error('That passcode does not match the passcode for your saved cards.');
-  const record=await encryptCard(cardInput('vault'),password,$('#vault-label').value);
-  if(choosing)await setVaultPasscode(password);
+   if(passphrase.length<MIN_PASSCODE)throw Error(`Choose a passcode of at least ${MIN_PASSCODE} characters.`);
+   if(passphrase!==$('#confirm-passcode').value)throw Error('The passcodes do not match.');
+   await setVaultPasscode(passphrase);
+  }
+  const record=await encryptCard(cardInput('vault'),passphrase,$('#vault-label').value);
   await storeAction('vault','put',record);
   clearSensitive();await reload();renderVault();busy=false;closeSheet();toast('Card saved.');
  });};
@@ -177,11 +194,11 @@ function saveVaultForm(){
 function inspectVault(id){
  const record=vault.find(item=>item.id===id);if(!record)return;
  if(!vaultPasscode){toast('Set one passcode for all your cards first.');setOnePasscode();return;}
- sheet('Unlock card','Enter the passcode for your saved cards',`<form id="inspect-form"><label for="inspect-passcode">Passcode</label><input id="inspect-passcode" type="password" autocomplete="off" required data-sensitive><button class="button primary wide">Unlock</button></form><div id="inspect-result" role="status"></div>`);$('#inspect-form').onsubmit=event=>{event.preventDefault();operation(async()=>{const password=$('#inspect-passcode').value;$('#inspect-passcode').value='';$('#inspect-result').replaceChildren();const {card,label}=await unlockRecord(record,password);renderVault();$('#inspect-result').innerHTML=`<div class="notice"><strong>${esc(label)}</strong><br>${esc(card.brand)} · •••• ${esc(card.number.slice(-4))}<br>Expires ${card.month} / ${card.year}</div><button id="inspect-edit" class="button secondary wide">Edit this card</button>`;$('#inspect-edit').onclick=()=>editVaultForm(id);});};}
+ sheet('Unlock card','Enter the passcode for your saved cards',`<form id="inspect-form"><label for="inspect-passcode">Passcode</label><input id="inspect-passcode" type="tel" inputmode="tel" class="passcode" autocomplete="off" required data-sensitive><button class="button primary wide">Unlock</button></form><div id="inspect-result" role="status"></div>`);$('#inspect-form').onsubmit=event=>{event.preventDefault();operation(async()=>{const password=$('#inspect-passcode').value;$('#inspect-passcode').value='';$('#inspect-result').replaceChildren();const {card,label}=await unlockRecord(record,password);renderVault();$('#inspect-result').innerHTML=`<div class="notice"><strong>${esc(label)}</strong><br>${esc(card.brand)} · •••• ${esc(card.number.slice(-4))}<br>Expires ${card.month} / ${card.year}</div><button id="inspect-edit" class="button secondary wide">Edit this card</button>`;$('#inspect-edit').onclick=()=>editVaultForm(id);});};}
 function editVaultForm(id){
  const record=vault.find(item=>item.id===id);if(!record)return;
  if(!vaultPasscode){toast('Set one passcode for all your cards first.');setOnePasscode();return;}
- sheet('Edit card','Enter your card passcode to make changes',`<form id="edit-unlock-form"><label for="edit-passcode">Passcode</label><input id="edit-passcode" type="password" autocomplete="off" data-sensitive required placeholder="Enter your card passcode"><p class="small-note">One passcode protects every card saved on this device.</p><button class="button primary wide" type="submit">Unlock card</button></form>`);
+ sheet('Edit card','Enter your card passcode to make changes',`<form id="edit-unlock-form"><label for="edit-passcode">Passcode</label><input id="edit-passcode" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive required placeholder="Enter your card passcode"><p class="small-note">One passcode protects every card saved on this device.</p><button class="button primary wide" type="submit">Unlock card</button></form>`);
  $('#edit-passcode').focus();
  $('#edit-unlock-form').onsubmit=event=>{event.preventDefault();operation(async()=>{
   const password=$('#edit-passcode').value;
@@ -200,7 +217,7 @@ function editVaultForm(id){
 }
 function setOnePasscode(){
  if(!vault.length){toast('Add a card and choose its passcode.');return;}
- sheet('One card passcode','Use the same passcode for every saved card',`<form id="one-passcode-form" autocomplete="off"><p class="small-note">Choose the passcode for all your cards, then enter each card's current passcode so it can be moved onto the new one. Cards you leave blank keep their old passcode.</p><label for="shared-passcode">Passcode for all cards</label><input id="shared-passcode" type="password" autocomplete="new-password" data-sensitive required minlength="${MIN_PASSCODE}" placeholder="At least ${MIN_PASSCODE} characters"><label for="confirm-shared-passcode">Confirm passcode</label><input id="confirm-shared-passcode" type="password" autocomplete="new-password" data-sensitive required>${vault.map((item,index)=>`<label for="old-${esc(item.id)}">Current passcode for ${esc(item.summary?.label||'saved card '+(index+1))}</label><input id="old-${esc(item.id)}" type="password" autocomplete="off" data-sensitive placeholder="Leave blank to keep this card's old passcode">`).join('')}<button class="button primary wide" type="submit">Save one passcode</button></form>`);
+ sheet('One card passcode','Use the same passcode for every saved card',`<form id="one-passcode-form" autocomplete="off"><p class="small-note">Choose the passcode for all your cards, then enter each card's current passcode so it can be moved onto the new one. Cards you leave blank keep their old passcode.</p><label for="shared-passcode">Passcode for all cards</label><input id="shared-passcode" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive required minlength="${MIN_PASSCODE}" placeholder="At least ${MIN_PASSCODE} characters"><label for="confirm-shared-passcode">Confirm passcode</label><input id="confirm-shared-passcode" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive required>${vault.map((item,index)=>`<label for="old-${esc(item.id)}">Current passcode for ${esc(item.summary?.label||'saved card '+(index+1))}</label><input id="old-${esc(item.id)}" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive placeholder="Leave blank to keep this card's old passcode">`).join('')}<button class="button primary wide" type="submit">Save one passcode</button></form>`);
  $('#one-passcode-form').onsubmit=event=>{event.preventDefault();operation(async()=>{
   const password=$('#shared-passcode').value;
   if(password.length<MIN_PASSCODE)throw Error(`Choose a passcode of at least ${MIN_PASSCODE} characters.`);
@@ -219,7 +236,7 @@ function setOnePasscode(){
  });
 };
 }
-function privacy(){sheet('Privacy','Card storage and payments',`<div class="notice">AutoFill is the default. Saving a card in this app is optional.</div><h3>On this device</h3><p class="small-note">Tickets and encrypted vault records live in IndexedDB. One passcode protects every saved card: the app keeps only a sealed check value to confirm it, never the passcode itself. Each card is sealed with AES-256-GCM using a random salt and nonce and a PBKDF2-SHA-256 key derived from that passcode (600,000 iterations). A wrong passcode or modified record fails authentication before any card fields are filled or changed.</p><h3>When you pay</h3><p class="small-note">Card details are sent directly to Authorize.net for tokenization. Your API Worker receives the ticket, payment token, amount, and masked card metadata. CVV is never saved by the app. No card data is put in cookies, URLs, app logs, or backups.</p><h3>What encryption cannot do</h3><p class="small-note">A short PIN can be guessed offline. Malicious JavaScript or a compromised device can read details while you enter or decrypt them. Browser storage may be cleared. This prototype has not undergone a payment security audit.</p>`);}
+function privacy(){sheet('Privacy','Card storage and payments',`<div class="notice">AutoFill is the default. Saving a card in this app is optional.</div><h3>On this device</h3><p class="small-note">Tickets and encrypted vault records live in IndexedDB. One passcode protects every saved card: the app keeps only a sealed check value to confirm it, never the passcode itself. Each card is sealed with AES-256-GCM using a random salt and nonce and a PBKDF2-SHA-256 key derived from that passcode (600,000 iterations). A wrong passcode or modified record fails authentication before any card fields are filled or changed. The passcode is kept in memory for this visit only, so a new card can reuse it without asking; it is never written to storage. After a reload, unlock once before adding a card. Replacing the passcode without the old one is only possible after every saved card is removed.</p><h3>When you pay</h3><p class="small-note">Card details are sent directly to Authorize.net for tokenization. Your API Worker receives the ticket, payment token, amount, and masked card metadata. CVV is never saved by the app. No card data is put in cookies, URLs, app logs, or backups.</p><h3>What encryption cannot do</h3><p class="small-note">A short PIN can be guessed offline. Malicious JavaScript or a compromised device can read details while you enter or decrypt them. Browser storage may be cleared. This prototype has not undergone a payment security audit.</p>`);}
 function connectAPI(){
  if(busy)return;
  sheet('Connect parking API','Enter the access key for your Worker',`
@@ -272,9 +289,9 @@ $('#forget-api-key').onclick=()=>operation(async()=>{
  disconnectAPI();
  toast('API key forgotten.');
 });
-$('#clear-data').onclick=()=>{if(confirm('Erase all local tickets, duplicate-payment safeguards, encrypted cards, the card passcode, and the saved API key? This cannot be undone.'))operation(async()=>{for(const store of ['tickets','vault','preferences'])await storeAction(store,'clear');await reload();renderVault();disconnectAPI();toast('Local data erased.');});};
+$('#clear-data').onclick=()=>{if(confirm('Erase all local tickets, duplicate-payment safeguards, encrypted cards, the card passcode, and the saved API key? This cannot be undone.'))operation(async()=>{for(const store of ['tickets','vault','preferences'])await storeAction(store,'clear');forgetVaultPasscode();await reload();renderVault();disconnectAPI();toast('Local data erased.');});};
 document.addEventListener('input',event=>{const field=event.target;if(field instanceof HTMLInputElement&&field.id.endsWith('-expiration')&&event.isTrusted){const digits=field.value.replace(/[^0-9]/g,'').slice(0,6);field.value=digits.length>2?digits.slice(0,2)+' / '+digits.slice(2):digits;}});
-document.addEventListener('visibilitychange',()=>{if(document.hidden){clearSensitive();stopScan();}});window.addEventListener('pagehide',()=>{clearSensitive();stopScan();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){clearSensitive();stopScan();}});window.addEventListener('pagehide',()=>{clearSensitive();stopScan();forgetVaultPasscode();});
 window.addEventListener('unhandledrejection',event=>{event.preventDefault();toast('The operation could not finish. If a payment was submitted, verify it before retrying.');});
 async function boot(){try{await reload();}catch(e){$('#ticket-list').innerHTML='<div class="empty-state">Local storage is unavailable. Enable browser storage and reload. No payment can be made.</div>';showError(e);}}
 // Keep scrolling and ticket swipes while suppressing multi-touch zoom.

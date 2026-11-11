@@ -37,3 +37,6 @@ body{background:var(--bg);color:var(--fg)}main{max-width:740px;padding:14px 16px
 *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
 html,body,dialog{touch-action:pan-x pan-y}
 input,textarea,[contenteditable="true"],[contenteditable=""]{-webkit-user-select:text;user-select:text;-webkit-touch-callout:default}
+
+/* Passcode fields open the phone keypad (type=tel) but stay masked where supported. */
+.passcode{-webkit-text-security:disc;letter-spacing:.12em;font-variant-numeric:tabular-nums}

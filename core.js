@@ -55,6 +55,9 @@ const PASSCODE_KEY='vaultPasscode';
 const PASSCODE_CHECK='parkingpocket-vault-passcode-check-v1';
 const PASSCODE_AAD='parkingpocket-vault-passcode-v1';
 const MIN_PASSCODE=6;
+// Held for this page visit only, so new cards can reuse the passcode without
+// asking again. It is never written to IndexedDB, localStorage or cookies.
+let sessionPasscode=null;
 function passcodeMeta(meta){
  return meta&&typeof meta==='object'&&meta.version===1&&meta.iterations===600000&&typeof meta.salt==='string'&&typeof meta.iv==='string'&&typeof meta.ciphertext==='string'?meta:null;
 }
@@ -68,6 +71,7 @@ async function setVaultPasscode(passphrase){
   const sealed=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:enc.encode(PASSCODE_AAD),tagLength:128},key,plaintext);
   const meta={version:1,iterations:600000,salt:b64(salt),iv:b64(iv),ciphertext:b64(new Uint8Array(sealed))};
   await storeAction('preferences','put',meta,PASSCODE_KEY);
+  sessionPasscode=passphrase;
   return meta;
  }finally{plaintext.fill(0);}
 }
@@ -82,6 +86,13 @@ async function verifyVaultPasscode(passphrase){
   return dec.decode(plaintext)===PASSCODE_CHECK;
  }catch{return false;}finally{plaintext?.fill(0);}
 }
+async function unlockVault(passphrase){
+ if(!(await verifyVaultPasscode(passphrase)))return false;
+ sessionPasscode=passphrase;
+ return true;
+}
+function cachedVaultPasscode(){return sessionPasscode;}
+function forgetVaultPasscode(){sessionPasscode=null;}
 let database;
 async function db(){if(database)return database;database=await new Promise((resolve,reject)=>{const request=indexedDB.open('parkingpocket-web-v1',1);request.onupgradeneeded=()=>{const d=request.result;d.createObjectStore('tickets',{keyPath:'id'});d.createObjectStore('vault',{keyPath:'id'});d.createObjectStore('preferences');};request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(Error('Local storage is unavailable. Enable browser storage to continue.'));});return database;}
 async function storeAction(store,action,value,key){const d=await db();return new Promise((resolve,reject)=>{const tx=d.transaction(store,action==='getAll'||action==='get'?'readonly':'readwrite');let request;try{const s=tx.objectStore(store);request=key===undefined?s[action](...(value===undefined?[]:[value])):s[action](value,key);}catch(error){reject(error);return;}tx.oncomplete=()=>resolve(request.result);tx.onabort=tx.onerror=()=>reject(Error('Could not save local data. No payment was submitted.'));});}
@@ -160,5 +171,5 @@ async function api(path,body){
  return requestAPI(path,body,requireAPI());
 }
 
-return {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR,apiConnected,requireAPI,connectParkingAPI,disconnectAPI,getVaultPasscode,setVaultPasscode,verifyVaultPasscode,MIN_PASSCODE};
+return {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR,apiConnected,requireAPI,connectParkingAPI,disconnectAPI,getVaultPasscode,setVaultPasscode,verifyVaultPasscode,unlockVault,cachedVaultPasscode,forgetVaultPasscode,MIN_PASSCODE};
 })();
