@@ -64,8 +64,15 @@ function passcodeMeta(meta){
 async function getVaultPasscode(){
  return passcodeMeta(await storeAction('preferences','get',PASSCODE_KEY));
 }
+function passcodeProblem(passphrase){
+ if(typeof passphrase!=='string'||!passphrase.length)return 'Enter your card passcode.';
+ if(!/^[0-9]+$/.test(passphrase))return 'Use digits only for your card passcode.';
+ if(passphrase.length<MIN_PASSCODE)return 'Choose a passcode of at least '+MIN_PASSCODE+' digits.';
+ return null;
+}
 async function setVaultPasscode(passphrase){
- if(typeof passphrase!=='string'||passphrase.length<MIN_PASSCODE)throw Error('Choose a passcode of at least '+MIN_PASSCODE+' characters.');
+ const problem=passcodeProblem(passphrase);
+ if(problem)throw Error(problem);
  const salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12)),key=await derive(passphrase,salt),plaintext=enc.encode(PASSCODE_CHECK);
  try{
   const sealed=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:enc.encode(PASSCODE_AAD),tagLength:128},key,plaintext);
@@ -171,5 +178,5 @@ async function api(path,body){
  return requestAPI(path,body,requireAPI());
 }
 
-return {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR,apiConnected,requireAPI,connectParkingAPI,disconnectAPI,getVaultPasscode,setVaultPasscode,verifyVaultPasscode,unlockVault,cachedVaultPasscode,forgetVaultPasscode,MIN_PASSCODE};
+return {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR,apiConnected,requireAPI,connectParkingAPI,disconnectAPI,getVaultPasscode,setVaultPasscode,verifyVaultPasscode,unlockVault,cachedVaultPasscode,forgetVaultPasscode,passcodeProblem,MIN_PASSCODE};
 })();

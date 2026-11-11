@@ -2,7 +2,7 @@
 'use strict';
 const {wireTicketSwipes,setTicketEditing,closeTicketSwipes}=window.ParkingSwipes;
 const {icon,hydrateIcons}=window.ParkingIcons;
-const {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR,apiConnected,requireAPI,connectParkingAPI,disconnectAPI,getVaultPasscode,setVaultPasscode,unlockVault,cachedVaultPasscode,forgetVaultPasscode,MIN_PASSCODE}=window.ParkingCore;
+const {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR,apiConnected,requireAPI,connectParkingAPI,disconnectAPI,getVaultPasscode,setVaultPasscode,unlockVault,cachedVaultPasscode,forgetVaultPasscode,passcodeProblem,MIN_PASSCODE}=window.ParkingCore;
 const $=selector=>document.querySelector(selector),all=selector=>[...document.querySelectorAll(selector)];
 let currentView='tickets',editingTickets=false;
 let apiConnection=null;
@@ -178,11 +178,12 @@ function unlockForNewCard(){
 }
 function addCardForm(password){
  const choosing=!password;
- sheet('New payment method','Saved on this device',`<form id="vault-form" autocomplete="on"><label for="vault-label">Card name</label><input id="vault-label" maxlength="60" placeholder="My card" autocomplete="off">${cardFields('vault')}${choosing?`<label for="new-passcode">Choose a passcode</label><input id="new-passcode" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive required minlength="${MIN_PASSCODE}" placeholder="At least ${MIN_PASSCODE} characters"><label for="confirm-passcode">Confirm passcode</label><input id="confirm-passcode" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive required><p class="small-note">One passcode will protect every card you save. It cannot be recovered. To replace it later without knowing it, remove all saved cards first.</p>`:`<p class="small-note">Your card passcode is applied automatically. Security code is not saved.</p>`}<button class="button primary wide" type="submit">Save card</button></form>`);$('#vault-cvv').closest('.field-row').querySelector('div:last-child').hidden=true;$('#vault-cvv').value='';
+ sheet('New payment method','Saved on this device',`<form id="vault-form" autocomplete="on"><label for="vault-label">Card name</label><input id="vault-label" maxlength="60" placeholder="My card" autocomplete="off">${cardFields('vault')}${choosing?`<label for="new-passcode">Choose a passcode</label><input id="new-passcode" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive required placeholder="At least ${MIN_PASSCODE} digits"><label for="confirm-passcode">Confirm passcode</label><input id="confirm-passcode" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive required><p class="small-note">One passcode protects every card you save. Use digits only; it cannot be recovered. To replace it later without knowing it, remove all saved cards first.</p>`:`<p class="small-note">Your card passcode is applied automatically. Security code is not saved.</p>`}<button class="button primary wide" type="submit">Save card</button></form>`);$('#vault-cvv').closest('.field-row').querySelector('div:last-child').hidden=true;$('#vault-cvv').value='';
  $('#vault-form').onsubmit=event=>{event.preventDefault();operation(async()=>{
   const passphrase=choosing?$('#new-passcode').value:password;
   if(choosing){
-   if(passphrase.length<MIN_PASSCODE)throw Error(`Choose a passcode of at least ${MIN_PASSCODE} characters.`);
+   const problem=passcodeProblem(passphrase);
+   if(problem)throw Error(problem);
    if(passphrase!==$('#confirm-passcode').value)throw Error('The passcodes do not match.');
    await setVaultPasscode(passphrase);
   }
@@ -217,10 +218,11 @@ function editVaultForm(id){
 }
 function setOnePasscode(){
  if(!vault.length){toast('Add a card and choose its passcode.');return;}
- sheet('One card passcode','Use the same passcode for every saved card',`<form id="one-passcode-form" autocomplete="off"><p class="small-note">Choose the passcode for all your cards, then enter each card's current passcode so it can be moved onto the new one. Cards you leave blank keep their old passcode.</p><label for="shared-passcode">Passcode for all cards</label><input id="shared-passcode" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive required minlength="${MIN_PASSCODE}" placeholder="At least ${MIN_PASSCODE} characters"><label for="confirm-shared-passcode">Confirm passcode</label><input id="confirm-shared-passcode" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive required>${vault.map((item,index)=>`<label for="old-${esc(item.id)}">Current passcode for ${esc(item.summary?.label||'saved card '+(index+1))}</label><input id="old-${esc(item.id)}" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive placeholder="Leave blank to keep this card's old passcode">`).join('')}<button class="button primary wide" type="submit">Save one passcode</button></form>`);
+ sheet('One card passcode','Use the same passcode for every saved card',`<form id="one-passcode-form" autocomplete="off"><p class="small-note">Choose the passcode for all your cards, then enter each card's current passcode so it can be moved onto the new one. Cards you leave blank keep their old passcode.</p><label for="shared-passcode">Passcode for all cards</label><input id="shared-passcode" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive required placeholder="At least ${MIN_PASSCODE} digits"><label for="confirm-shared-passcode">Confirm passcode</label><input id="confirm-shared-passcode" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive required>${vault.map((item,index)=>`<label for="old-${esc(item.id)}">Current passcode for ${esc(item.summary?.label||'saved card '+(index+1))}</label><input id="old-${esc(item.id)}" type="tel" inputmode="tel" class="passcode" autocomplete="off" data-sensitive placeholder="Leave blank to keep this card's old passcode">`).join('')}<button class="button primary wide" type="submit">Save one passcode</button></form>`);
  $('#one-passcode-form').onsubmit=event=>{event.preventDefault();operation(async()=>{
   const password=$('#shared-passcode').value;
-  if(password.length<MIN_PASSCODE)throw Error(`Choose a passcode of at least ${MIN_PASSCODE} characters.`);
+  const problem=passcodeProblem(password);
+  if(problem)throw Error(problem);
   if(password!==$('#confirm-shared-passcode').value)throw Error('The passcodes do not match.');
   let moved=0,kept=0,failed=0;
   for(const record of vault){
