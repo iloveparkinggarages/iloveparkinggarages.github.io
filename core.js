@@ -49,7 +49,38 @@ async function decryptCard(record,passphrase){
   const salt=bytes(record.salt),iv=bytes(record.iv),ciphertext=bytes(record.ciphertext);if(salt.length!==16||iv.length!==12||ciphertext.length<17)throw Error();
   const key=await derive(passphrase,salt);plaintext=new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv,additionalData:vaultAAD(record),tagLength:128},key,ciphertext));
   const parsed=JSON.parse(dec.decode(plaintext));if(parsed.schema!==1||typeof parsed.label!=='string')throw Error();return {label:parsed.label,card:validateCard(parsed.card)};
- }catch{throw Error('Could not unlock this card. Check the passcode; the saved record may also be damaged. Nothing was filled or submitted.');}finally{plaintext?.fill(0);}
+ }catch{throw Error('Could not unlock this card. Check your card passcode; if this card was saved with a different passcode, use Change card passcode in Payment methods. Nothing was filled or submitted.');}finally{plaintext?.fill(0);}
+}
+const PASSCODE_KEY='vaultPasscode';
+const PASSCODE_CHECK='parkingpocket-vault-passcode-check-v1';
+const PASSCODE_AAD='parkingpocket-vault-passcode-v1';
+const MIN_PASSCODE=6;
+function passcodeMeta(meta){
+ return meta&&typeof meta==='object'&&meta.version===1&&meta.iterations===600000&&typeof meta.salt==='string'&&typeof meta.iv==='string'&&typeof meta.ciphertext==='string'?meta:null;
+}
+async function getVaultPasscode(){
+ return passcodeMeta(await storeAction('preferences','get',PASSCODE_KEY));
+}
+async function setVaultPasscode(passphrase){
+ if(typeof passphrase!=='string'||passphrase.length<MIN_PASSCODE)throw Error('Choose a passcode of at least '+MIN_PASSCODE+' characters.');
+ const salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12)),key=await derive(passphrase,salt),plaintext=enc.encode(PASSCODE_CHECK);
+ try{
+  const sealed=await crypto.subtle.encrypt({name:'AES-GCM',iv,additionalData:enc.encode(PASSCODE_AAD),tagLength:128},key,plaintext);
+  const meta={version:1,iterations:600000,salt:b64(salt),iv:b64(iv),ciphertext:b64(new Uint8Array(sealed))};
+  await storeAction('preferences','put',meta,PASSCODE_KEY);
+  return meta;
+ }finally{plaintext.fill(0);}
+}
+async function verifyVaultPasscode(passphrase){
+ const meta=await getVaultPasscode();
+ if(!meta)return false;
+ let plaintext;
+ try{
+  const salt=bytes(meta.salt),iv=bytes(meta.iv);if(salt.length!==16||iv.length!==12)return false;
+  const key=await derive(passphrase,salt);
+  plaintext=new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM',iv,additionalData:enc.encode(PASSCODE_AAD),tagLength:128},key,bytes(meta.ciphertext)));
+  return dec.decode(plaintext)===PASSCODE_CHECK;
+ }catch{return false;}finally{plaintext?.fill(0);}
 }
 let database;
 async function db(){if(database)return database;database=await new Promise((resolve,reject)=>{const request=indexedDB.open('parkingpocket-web-v1',1);request.onupgradeneeded=()=>{const d=request.result;d.createObjectStore('tickets',{keyPath:'id'});d.createObjectStore('vault',{keyPath:'id'});d.createObjectStore('preferences');};request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(Error('Local storage is unavailable. Enable browser storage to continue.'));});return database;}
@@ -129,5 +160,5 @@ async function api(path,body){
  return requestAPI(path,body,requireAPI());
 }
 
-return {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR,apiConnected,requireAPI,connectParkingAPI,disconnectAPI};
+return {esc,money,parseTicket,validateQuote,validateCard,validateCVV,processorPayload,encryptCard,decryptCard,storeAction,api,merchantFrom,recheckAt,PROCESSOR,apiConnected,requireAPI,connectParkingAPI,disconnectAPI,getVaultPasscode,setVaultPasscode,verifyVaultPasscode,MIN_PASSCODE};
 })();
